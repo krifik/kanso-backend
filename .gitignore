@@ -1,4 +1,5 @@
 kanso-server
+kanso-migrator
 kanso.db
 kanso.db-journal
 *.exe

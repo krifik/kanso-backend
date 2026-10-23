@@ -67,6 +67,9 @@ func LoadConfig() Config {
 }
 
 func (c *Config) PostgresDSN() string {
+	if dbURL := getEnv("DATABASE_URL", ""); dbURL != "" {
+		return dbURL
+	}
 	return fmt.Sprintf(
 		"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=%s",
 		c.DBHost, c.DBUser, c.DBPass, c.DBName, c.DBPort, c.DBSSL, c.DBTimezone,
