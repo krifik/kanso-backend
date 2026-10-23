@@ -133,6 +133,13 @@ func (s *mutationService) ProcessInboundEmail(
 		return nil, errors.New("message_id is required")
 	}
 
+	// Resolve coupleID if pair_code (e.g. DUO-LOVE) was passed
+	resolvedCoupleID := coupleID
+	if couple, err := s.kansoRepo.GetCoupleByPairCode(coupleID); err == nil && couple != nil {
+		resolvedCoupleID = couple.ID
+	}
+	coupleID = resolvedCoupleID
+
 	var emailDate *time.Time
 	var rawHTML *string
 	var accountEmail *string
