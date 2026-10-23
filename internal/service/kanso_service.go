@@ -83,6 +83,19 @@ func (s *kansoService) GetOverview(pairCode string) (*DuoOverview, error) {
 	}
 	mainBalance := totalPodBalances
 
+	// If no pods configured yet or pod balances are unassigned, calculate net balance directly from transactions
+	if len(pods) == 0 {
+		var netTxBalance float64
+		for _, t := range txs {
+			if t.Direction == "IN" || t.Type == "INCOME" || t.Type == "INCOME_SALARY" || t.Type == "INCOME_PRELOVED" {
+				netTxBalance += t.Amount
+			} else {
+				netTxBalance -= (t.Amount + t.AdminFee)
+			}
+		}
+		mainBalance = netTxBalance
+	}
+
 	// Calculate Level from HarmonyXP
 	level := 1
 	if couple.HarmonyXP >= 600 {

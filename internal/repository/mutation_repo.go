@@ -70,11 +70,10 @@ func (r *mutationRepository) UpdateEmailMutationLog(log *model.EmailMutationLog)
 
 func (r *mutationRepository) FindPodByProviderAndSuffix(coupleID, providerCode, suffix string) (*model.PocketPod, error) {
 	var pod model.PocketPod
-	query := r.db.Where("couple_id = ?", coupleID)
 
 	if providerCode != "" && suffix != "" {
 		// Exact match on both provider code and account suffix
-		if err := query.Where("LOWER(provider_code) = LOWER(?) AND account_number_suffix = ?", providerCode, suffix).First(&pod).Error; err == nil {
+		if err := r.db.Where("couple_id = ? AND LOWER(provider_code) = LOWER(?) AND account_number_suffix = ?", coupleID, providerCode, suffix).First(&pod).Error; err == nil {
 			return &pod, nil
 		}
 	}
@@ -84,6 +83,19 @@ func (r *mutationRepository) FindPodByProviderAndSuffix(coupleID, providerCode, 
 		if err := r.db.Where("couple_id = ? AND LOWER(provider_code) = LOWER(?)", coupleID, providerCode).First(&pod).Error; err == nil {
 			return &pod, nil
 		}
+	}
+
+	// Suffix only match (e.g. last 4 digits of card/account)
+	if suffix != "" {
+		if err := r.db.Where("couple_id = ? AND account_number_suffix = ?", coupleID, suffix).First(&pod).Error; err == nil {
+			return &pod, nil
+		}
+	}
+
+	// If only 1 pod exists for the couple, associate with that primary pod
+	var pods []model.PocketPod
+	if err := r.db.Where("couple_id = ?", coupleID).Limit(2).Find(&pods).Error; err == nil && len(pods) == 1 {
+		return &pods[0], nil
 	}
 
 	// Not found
