@@ -1,0 +1,5 @@
+kanso-server
+kanso.db
+kanso.db-journal
+*.exe
+.env
