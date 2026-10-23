@@ -61,7 +61,7 @@ func LoadConfig() Config {
 		FrontendURL:        getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		LLMAPIKey:          getEnv("LLM_API_KEY", getEnv("GEMINI_API_KEY", "")),
-		LLMModel:           getEnv("LLM_MODEL", "gemini-2.5-flash-lite"),
+		LLMModel:           getEnv("LLM_MODEL", "gemini-3.5-flash-lite"),
 		WebhookSecret:      getEnv("WEBHOOK_SECRET", "kanso_webhook_secret_key"),
 	}
 }

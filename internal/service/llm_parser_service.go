@@ -38,7 +38,7 @@ type GeminiLLMParserService struct {
 
 func NewGeminiLLMParserService(apiKey, model string) *GeminiLLMParserService {
 	if model == "" {
-		model = "gemini-2.5-flash-lite"
+		model = "gemini-3.5-flash-lite"
 	}
 	return &GeminiLLMParserService{
 		apiKey: apiKey,
