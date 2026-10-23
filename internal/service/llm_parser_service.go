@@ -120,7 +120,7 @@ func (s *GeminiLLMParserService) ParseEmailMutation(ctx context.Context, cleanBo
 			},
 			"provider_code": map[string]interface{}{
 				"type": "STRING",
-				"enum": []string{"BCA", "MANDIRI", "BRI", "BNI", "BSI", "JAGO", "SEABANK", "GOPAY", "OVO", "DANA", "SHOPEEPAY", "OTHER"},
+				"enum": []string{"BCA", "MANDIRI", "BRI", "BNI", "BSI", "PERMATA", "CIMB", "DANAMON", "PANIN", "BTN", "MEGA", "OCBC", "MAYBANK", "JAGO", "SEABANK", "JENIUS", "BLU", "ALADIN", "NEOBANK", "SUPERBANK", "GOPAY", "OVO", "DANA", "SHOPEEPAY", "LINKAJA", "ASTRAPAY", "ISAKU", "FLIP", "OTHER"},
 			},
 			"direction": map[string]interface{}{
 				"type": "STRING",
@@ -173,30 +173,49 @@ func (s *GeminiLLMParserService) ParseEmailMutation(ctx context.Context, cleanBo
 		return nil, "", fmt.Errorf("failed to marshal gemini request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBytes))
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to create http request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("gemini api request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to read response body: %w", err)
-	}
-
+	var respBytes []byte
 	var geminiResp geminiResponse
-	if err := json.Unmarshal(respBytes, &geminiResp); err != nil {
-		return nil, string(respBytes), fmt.Errorf("failed to parse gemini response: %w", err)
-	}
 
-	if geminiResp.Error != nil {
-		return nil, string(respBytes), fmt.Errorf("gemini api error (code %d): %s", geminiResp.Error.Code, geminiResp.Error.Message)
+	// Retry loop with exponential backoff for transient 503 / 429 errors
+	maxRetries := 3
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBytes))
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to create http request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return nil, "", fmt.Errorf("gemini api request failed: %w", err)
+		}
+
+		respBytes, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read response body: %w", err)
+		}
+
+		geminiResp = geminiResponse{}
+		if err := json.Unmarshal(respBytes, &geminiResp); err != nil {
+			return nil, string(respBytes), fmt.Errorf("failed to parse gemini response: %w", err)
+		}
+
+		if geminiResp.Error != nil {
+			// Check if transient error (503 Service Unavailable or 429 Rate Limit)
+			if (geminiResp.Error.Code == 503 || geminiResp.Error.Code == 429) && attempt < maxRetries {
+				select {
+				case <-ctx.Done():
+					return nil, string(respBytes), ctx.Err()
+				case <-time.After(time.Duration(1<<attempt) * time.Second):
+					continue
+				}
+			}
+			return nil, string(respBytes), fmt.Errorf("gemini api error (code %d): %s", geminiResp.Error.Code, geminiResp.Error.Message)
+		}
+
+		// Success break
+		break
 	}
 
 	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {

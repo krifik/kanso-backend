@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"kanso/backend/internal/infrastructure/parser"
 	"kanso/backend/internal/model"
 	"kanso/backend/internal/repository"
 	"math"
@@ -70,6 +71,9 @@ var allowedSenderDomains = []string{
 	"hibank.co.id",
 	"digibank.com",
 	"tyme.com",
+	// App Stores & Official Digital Invoices
+	"google.com",
+	"apple.com",
 	// E-Wallet & Payment Gateway Indonesia
 	"gopay.co.id",
 	"gojek.com",
@@ -146,7 +150,23 @@ func (s *mutationService) ProcessInboundEmail(
 		return nil, fmt.Errorf("error checking existing message_id: %w", err)
 	}
 	if existingLog != nil {
-		return nil, fmt.Errorf("duplicate message_id: email mutation has already been processed with status %s", existingLog.Status)
+		// If log is PROCESSED, check if transaction still exists in DB
+		hasher := sha256.New()
+		hasher.Write([]byte(messageID))
+		hashHex := hex.EncodeToString(hasher.Sum(nil))
+		computedRefID := fmt.Sprintf("EMAIL-%s", hashHex[:24])
+
+		existingTx, _ := s.repo.GetTransactionByExternalRefID(computedRefID)
+		if existingTx == nil {
+			// Also check direct messageID in case it was created via fallback
+			existingTx, _ = s.repo.GetTransactionByExternalRefID(messageID)
+		}
+
+		if existingTx != nil {
+			// Transaction already exists, avoid duplicate
+			return existingTx, nil
+		}
+		// If transaction no longer exists in DB (e.g. user deleted or previous partial fail), allow re-processing
 	}
 
 	// 2. Validate sender domain against trusted Indonesian banks and e-wallets
@@ -171,7 +191,6 @@ func (s *mutationService) ProcessInboundEmail(
 
 	rawBodyCopy := rawBody
 	logRecord := &model.EmailMutationLog{
-		ID:            uuid.New().String(),
 		CoupleID:      coupleID,
 		UserID:        userID,
 		MessageID:     messageID,
@@ -181,13 +200,18 @@ func (s *mutationService) ProcessInboundEmail(
 		RawHTMLBody:   rawHTML,
 		CreatedAt:     time.Now(),
 	}
+	if existingLog != nil {
+		logRecord.ID = existingLog.ID
+	} else {
+		logRecord.ID = uuid.New().String()
+	}
 
 	if !senderDomainAllowed {
 		errMsg := fmt.Sprintf("sender %s is not in trusted financial domain list", senderEmail)
 		logRecord.Status = "IGNORED_NON_TX"
 		logRecord.ErrorMessage = &errMsg
 		_ = s.repo.CreateEmailMutationLog(logRecord)
-		return nil, fmt.Errorf("untrusted sender domain: %s", senderEmail)
+		return nil, nil // Ignored cleanly without error, prevents heuristic regex fallback from misclassifying marketing emails
 	}
 
 	// 4. Invoke LLM Structured Output Parser
@@ -230,11 +254,26 @@ func (s *mutationService) ProcessInboundEmail(
 	direction := "OUT"
 	if parsedResult.Direction != nil && (*parsedResult.Direction == "IN" || *parsedResult.Direction == "INTERNAL_TRANSFER") {
 		direction = *parsedResult.Direction
+	} else {
+		// Heuristic direction check if LLM omitted direction
+		lowerClean := strings.ToLower(logRecord.CleanBodyText)
+		if strings.Contains(lowerClean, "transfer masuk") || strings.Contains(lowerClean, "incoming transfer") ||
+			strings.Contains(lowerClean, "dana masuk") || strings.Contains(lowerClean, "uang masuk") ||
+			strings.Contains(lowerClean, "top up berhasil") || strings.Contains(lowerClean, "setoran") {
+			direction = "IN"
+		}
 	}
 
 	amount := 0.0
 	if parsedResult.Amount != nil {
 		amount = *parsedResult.Amount
+	}
+	// Fallback amount extraction if structured LLM missed amount but marked as transaction
+	if amount <= 0 {
+		receipt := parser.ParseBankReceipt(logRecord.CleanBodyText)
+		if receipt.Amount > 0 {
+			amount = receipt.Amount
+		}
 	}
 
 	adminFee := 0.0
@@ -263,6 +302,18 @@ func (s *mutationService) ProcessInboundEmail(
 		title = *parsedResult.MerchantOrCounterparty
 	} else if parsedResult.SuggestedCategory != nil && *parsedResult.SuggestedCategory != "" {
 		title = *parsedResult.SuggestedCategory
+	} else {
+		// Contextual default title
+		lowerClean := strings.ToLower(logRecord.CleanBodyText)
+		if direction == "IN" {
+			if strings.Contains(lowerClean, "permata") {
+				title = "Permata: Transfer Masuk"
+			} else {
+				title = "Transfer Masuk"
+			}
+		} else if strings.Contains(lowerClean, "qr pay") {
+			title = "QRIS / QR Pay"
+		}
 	}
 
 	txType := "EXPENSE"
@@ -398,6 +449,13 @@ func (s *mutationService) RetryMutationLog(ctx context.Context, logID string) (*
 	amount := 0.0
 	if parsedResult.Amount != nil {
 		amount = *parsedResult.Amount
+	}
+	// Fallback amount extraction if structured LLM missed amount but marked as transaction
+	if amount <= 0 {
+		receipt := parser.ParseBankReceipt(logRecord.CleanBodyText)
+		if receipt.Amount > 0 {
+			amount = receipt.Amount
+		}
 	}
 
 	adminFee := 0.0

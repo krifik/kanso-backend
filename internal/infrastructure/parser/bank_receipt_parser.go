@@ -56,10 +56,26 @@ func ParseBankReceipt(rawText string) ParsedReceipt {
 		Description:  "Pengeluaran Otomatis",
 		Category:     "Lainnya",
 		SuggestedPod: "01", // Default to daily ritual / routine
-		BankOrSource: "Bank Umum",
+		BankOrSource: "",
 	}
 
 	lower := strings.ToLower(rawText)
+
+	// Filter out marketing, promo, bill reminder, newsletter emails from regex fallback
+	marketingKeywords := []string{
+		"agoda", "ktik.me", "newsletter", "unsubscribe", "berhenti berlangganan",
+		"diskon", "promo", "voucher", "cashback hingga", "top price drops",
+		"ingat tagihan", "jatuh tempo", "sebelum jatuh tempo", "lunasi tagihan",
+		"jobstreet", "redbus", "tiket.com", "tokopedia promo", "shopee promo",
+		"pengumuman", "privacy policy", "syarat dan ketentuan",
+	}
+	for _, kw := range marketingKeywords {
+		if strings.Contains(lower, kw) {
+			res.IsRecognized = false
+			res.Amount = 0
+			return res
+		}
+	}
 
 	// 1. Detect Bank & E-Wallet
 	if jagoRegex.MatchString(lower) {
@@ -116,6 +132,13 @@ func ParseBankReceipt(rawText string) ParsedReceipt {
 		res.BankOrSource = "i.saku"
 	} else if strings.Contains(lower, "flip") {
 		res.BankOrSource = "Flip"
+	}
+
+	if res.BankOrSource == "" {
+		// Do not recognize random emails as financial transactions
+		res.IsRecognized = false
+		res.Amount = 0
+		return res
 	}
 
 	// 2. Extract Amount
